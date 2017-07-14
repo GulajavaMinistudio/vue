@@ -1,13 +1,12 @@
 {
   "name": "vue",
-  "version": "2.3.3",
+  "version": "2.4.0",
   "description": "Reactive, component-oriented view layer for modern web interfaces.",
   "main": "dist/vue.runtime.common.js",
   "module": "dist/vue.runtime.esm.js",
   "unpkg": "dist/vue.js",
   "typings": "types/index.d.ts",
   "files": [
-    "src",
     "dist/*.js",
     "types/*.d.ts"
   ],
