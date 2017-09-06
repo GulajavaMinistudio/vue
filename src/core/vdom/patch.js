@@ -406,7 +406,6 @@ export function createPatchFunction (backend) {
           : findIdxInOld(newStartVnode, oldCh, oldStartIdx, oldEndIdx)
         if (isUndef(idxInOld)) { // New element
           createElm(newStartVnode, insertedVnodeQueue, parentElm, oldStartVnode.elm)
-          newStartVnode = newCh[++newStartIdx]
         } else {
           elmToMove = oldCh[idxInOld]
           /* istanbul ignore if */
@@ -420,13 +419,12 @@ export function createPatchFunction (backend) {
             patchVnode(elmToMove, newStartVnode, insertedVnodeQueue)
             oldCh[idxInOld] = undefined
             canMove && nodeOps.insertBefore(parentElm, elmToMove.elm, oldStartVnode.elm)
-            newStartVnode = newCh[++newStartIdx]
           } else {
             // same key but different element. treat as new element
             createElm(newStartVnode, insertedVnodeQueue, parentElm, oldStartVnode.elm)
-            newStartVnode = newCh[++newStartIdx]
           }
         }
+        newStartVnode = newCh[++newStartIdx]
       }
     }
     if (oldStartIdx > oldEndIdx) {
@@ -660,14 +658,28 @@ export function createPatchFunction (backend) {
           // component root element replaced.
           // update parent placeholder node element, recursively
           let ancestor = vnode.parent
+          const patchable = isPatchable(vnode)
           while (ancestor) {
-            ancestor.elm = vnode.elm
-            ancestor = ancestor.parent
-          }
-          if (isPatchable(vnode)) {
-            for (let i = 0; i < cbs.create.length; ++i) {
-              cbs.create[i](emptyNode, vnode.parent)
+            for (let i = 0; i < cbs.destroy.length; ++i) {
+              cbs.destroy[i](ancestor)
             }
+            ancestor.elm = vnode.elm
+            if (patchable) {
+              for (let i = 0; i < cbs.create.length; ++i) {
+                cbs.create[i](emptyNode, ancestor)
+              }
+              // #6513
+              // invoke insert hooks that may have been merged by create hooks.
+              // e.g. for directives that uses the "inserted" hook.
+              const insert = ancestor.data.hook.insert
+              if (insert.merged) {
+                // start at index 1 to avoid re-invoking component mounted hook
+                for (let i = 1; i < insert.fns.length; i++) {
+                  insert.fns[i]()
+                }
+              }
+            }
+            ancestor = ancestor.parent
           }
         }
 
