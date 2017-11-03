@@ -1000,6 +1000,40 @@ describe('SSR: renderToString', () => {
       done()
     })
   })
+
+  it('render muted properly', done => {
+    renderVmWithOptions({
+      template: '<video muted></video>'
+    }, result => {
+      expect(result).toContain('<video muted="muted" data-server-rendered="true"></video>')
+      done()
+    })
+  })
+
+  it('render v-model with textarea', done => {
+    renderVmWithOptions({
+      data: { foo: 'bar' },
+      template: '<div><textarea v-model="foo"></textarea></div>'
+    }, result => {
+      expect(result).toContain('<textarea>bar</textarea>')
+      done()
+    })
+  })
+
+  it('render v-model with textarea (non-optimized)', done => {
+    renderVmWithOptions({
+      render (h) {
+        return h('textarea', {
+          domProps: {
+            value: 'foo'
+          }
+        })
+      }
+    }, result => {
+      expect(result).toContain('<textarea data-server-rendered="true">foo</textarea>')
+      done()
+    })
+  })
 })
 
 function renderVmWithOptions (options, cb) {
