@@ -1,5 +1,5 @@
 /*!
- * Vue.js v2.6.0-beta.3
+ * Vue.js v2.6.2
  * (c) 2014-2019 Evan You
  * Released under the MIT License.
  */
@@ -1844,7 +1844,7 @@
     var res;
     try {
       res = args ? handler.apply(context, args) : handler.call(context);
-      if (isPromise(res)) {
+      if (res && !res._isVue && isPromise(res)) {
         res.catch(function (e) { return handleError(e, vm, info + " (Promise/async)"); });
       }
     } catch (e) {
@@ -2747,7 +2747,7 @@
       var slot = fns[i];
       if (Array.isArray(slot)) {
         resolveScopedSlots(slot, hasDynamicKeys, res);
-      } else {
+      } else if (slot) {
         res[slot.key] = slot.fn;
       }
     }
@@ -3883,7 +3883,7 @@
       res = {};
       for (var key in slots) {
         if (slots[key] && key[0] !== '$') {
-          res[key] = normalizeScopedSlot(slots[key]);
+          res[key] = normalizeScopedSlot(normalSlots, key, slots[key]);
         }
       }
     }
@@ -3894,17 +3894,26 @@
       }
     }
     res._normalized = true;
-    res.$stable = slots && slots.$stable;
+    res.$stable = slots ? slots.$stable : true;
     return res
   }
 
-  function normalizeScopedSlot(fn) {
-    return function (scope) {
+  function normalizeScopedSlot(normalSlots, key, fn) {
+    var normalized = function (scope) {
+      if ( scope === void 0 ) scope = {};
+
       var res = fn(scope);
       return res && typeof res === 'object' && !Array.isArray(res)
         ? [res] // single vnode
         : normalizeChildren(res)
+    };
+    // proxy scoped slots on normal $slots
+    if (!hasOwn(normalSlots, key)) {
+      Object.defineProperty(normalSlots, key, {
+        get: normalized
+      });
     }
+    return normalized
   }
 
   function proxyNormalSlot(slots, key) {
@@ -4568,7 +4577,7 @@
   function transformModel (options, data) {
     var prop = (options.model && options.model.prop) || 'value';
     var event = (options.model && options.model.event) || 'input'
-    ;(data.props || (data.props = {}))[prop] = data.model.value;
+    ;(data.attrs || (data.attrs = {}))[prop] = data.model.value;
     var on = data.on || (data.on = {});
     var existing = on[event];
     var callback = data.model.callback;
@@ -5314,7 +5323,7 @@
     value: FunctionalRenderContext
   });
 
-  Vue.version = '2.6.0-beta.3';
+  Vue.version = '2.6.2';
 
   /*  */
 
@@ -5334,6 +5343,17 @@
   };
 
   var isEnumeratedAttr = makeMap('contenteditable,draggable,spellcheck');
+
+  var isValidContentEditableValue = makeMap('events,caret,typing,plaintext-only');
+
+  var convertEnumeratedValue = function (key, value) {
+    return isFalsyAttrValue(value) || value === 'false'
+      ? 'false'
+      // allow arbitrary string value for contenteditable
+      : key === 'contenteditable' && isValidContentEditableValue(value)
+        ? value
+        : 'true'
+  };
 
   var isBooleanAttr = makeMap(
     'allowfullscreen,async,autofocus,autoplay,checked,compact,controls,declare,' +
@@ -6600,7 +6620,7 @@
         el.setAttribute(key, value);
       }
     } else if (isEnumeratedAttr(key)) {
-      el.setAttribute(key, isFalsyAttrValue(value) || value === 'false' ? 'false' : 'true');
+      el.setAttribute(key, convertEnumeratedValue(key, value));
     } else if (isXlink(key)) {
       if (isFalsyAttrValue(value)) {
         el.removeAttributeNS(xlinkNS, getXlinkProp(key));
@@ -6622,8 +6642,8 @@
       /* istanbul ignore if */
       if (
         isIE && !isIE9 &&
-        (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') &&
-        key === 'placeholder' && !el.__ieph
+        el.tagName === 'TEXTAREA' &&
+        key === 'placeholder' && value !== '' && !el.__ieph
       ) {
         var blocker = function (e) {
           e.stopImmediatePropagation();
@@ -6978,7 +6998,7 @@
     if (cssVarRE.test(name)) {
       el.style.setProperty(name, val);
     } else if (importantRE.test(val)) {
-      el.style.setProperty(name, val.replace(importantRE, ''), 'important');
+      el.style.setProperty(hyphenate(name), val.replace(importantRE, ''), 'important');
     } else {
       var normalizedName = normalize(name);
       if (Array.isArray(val)) {

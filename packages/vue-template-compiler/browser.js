@@ -324,10 +324,11 @@
     '&quot;': '"',
     '&amp;': '&',
     '&#10;': '\n',
-    '&#9;': '\t'
+    '&#9;': '\t',
+    '&#39;': "'"
   };
-  var encodedAttr = /&(?:lt|gt|quot|amp);/g;
-  var encodedAttrWithNewLines = /&(?:lt|gt|quot|amp|#10|#9);/g;
+  var encodedAttr = /&(?:lt|gt|quot|amp|#39);/g;
+  var encodedAttrWithNewLines = /&(?:lt|gt|quot|amp|#39|#10|#9);/g;
 
   // #5992
   var isIgnoreNewlineTag = makeMap('pre,textarea', true);
@@ -1694,6 +1695,8 @@
 
   var isEnumeratedAttr = makeMap('contenteditable,draggable,spellcheck');
 
+  var isValidContentEditableValue = makeMap('events,caret,typing,plaintext-only');
+
   var isBooleanAttr = makeMap(
     'allowfullscreen,async,autofocus,autoplay,checked,compact,controls,declare,' +
     'default,defaultchecked,defaultmuted,defaultselected,defer,disabled,' +
@@ -2725,7 +2728,7 @@
   /*  */
 
   var onRE = /^@|^v-on:/;
-  var dirRE = /^v-|^@|^:|^\./;
+  var dirRE = /^v-|^@|^:/;
   var forAliasRE = /([\s\S]*?)\s+(?:in|of)\s+([\s\S]*)/;
   var forIteratorRE = /,([^,\}\]]*)(?:,([^,\}\]]*))?$/;
   var stripParensRE = /^\(|\)$/g;
@@ -2733,7 +2736,6 @@
 
   var argRE = /:(.*)$/;
   var bindRE = /^:|^\.|^v-bind:/;
-  var propBindRE = /^\./;
   var modifierRE = /\.[^.]+/g;
 
   var slotRE = /^v-slot(:|$)|^#/;
@@ -2810,6 +2812,7 @@
     }
 
     function closeElement (element) {
+      trimEndingWhitespace(element);
       if (!inVPre && !element.processed) {
         element = processElement(element, options);
       }
@@ -2836,14 +2839,25 @@
       if (currentParent && !element.forbidden) {
         if (element.elseif || element.else) {
           processIfConditions(element, currentParent);
-        } else if (element.slotScope) { // scoped slot
-          var name = element.slotTarget || '"default"'
-          ;(currentParent.scopedSlots || (currentParent.scopedSlots = {}))[name] = element;
         } else {
+          if (element.slotScope) {
+            // scoped slot
+            // keep it in the children list so that v-else(-if) conditions can
+            // find it as the prev node.
+            var name = element.slotTarget || '"default"'
+            ;(currentParent.scopedSlots || (currentParent.scopedSlots = {}))[name] = element;
+          }
           currentParent.children.push(element);
           element.parent = currentParent;
         }
       }
+
+      // final children cleanup
+      // filter out scoped slots
+      element.children = element.children.filter(function (c) { return !(c).slotScope; });
+      // remove trailing whitespace node again
+      trimEndingWhitespace(element);
+
       // check pre state
       if (element.pre) {
         inVPre = false;
@@ -2854,6 +2868,20 @@
       // apply post-transforms
       for (var i = 0; i < postTransforms.length; i++) {
         postTransforms[i](element, options);
+      }
+    }
+
+    function trimEndingWhitespace (el) {
+      // remove trailing whitespace node
+      if (!inPre) {
+        var lastNode;
+        while (
+          (lastNode = el.children[el.children.length - 1]) &&
+          lastNode.type === 3 &&
+          lastNode.text === ' '
+        ) {
+          el.children.pop();
+        }
       }
     }
 
@@ -2971,13 +2999,6 @@
 
       end: function end (tag, start, end$1) {
         var element = stack[stack.length - 1];
-        if (!inPre) {
-          // remove trailing whitespace node
-          var lastNode = element.children[element.children.length - 1];
-          if (lastNode && lastNode.type === 3 && lastNode.text === ' ') {
-            element.children.pop();
-          }
-        }
         // pop stack
         stack.length -= 1;
         currentParent = stack[stack.length - 1];
@@ -3059,16 +3080,20 @@
         }
       },
       comment: function comment (text, start, end) {
-        var child = {
-          type: 3,
-          text: text,
-          isComment: true
-        };
-        if (options.outputSourceRange) {
-          child.start = start;
-          child.end = end;
+        // adding anyting as a sibling to the root node is forbidden
+        // comments should still be allowed, but ignored
+        if (currentParent) {
+          var child = {
+            type: 3,
+            text: text,
+            isComment: true
+          };
+          if (options.outputSourceRange) {
+            child.start = start;
+            child.end = end;
+          }
+          currentParent.children.push(child);
         }
-        currentParent.children.push(child);
       }
     });
     return root
@@ -3321,6 +3346,13 @@
                 el
               );
             }
+            if (el.parent && !maybeComponent(el.parent)) {
+              warn$1(
+                "<template v-slot> can only appear at the root level inside " +
+                "the receiving the component",
+                el
+              );
+            }
           }
           var ref = getSlotName(slotBinding);
           var name = ref.name;
@@ -3360,8 +3392,9 @@
           var name$1 = ref$1.name;
           var dynamic$1 = ref$1.dynamic;
           var slotContainer = slots[name$1] = createASTElement('template', [], el);
+          slotContainer.slotTarget = name$1;
           slotContainer.slotTargetDynamic = dynamic$1;
-          slotContainer.children = el.children;
+          slotContainer.children = el.children.filter(function (c) { return !(c).slotScope; });
           slotContainer.slotScope = slotBinding$1.value || "_";
           // remove children as they are returned from scopedSlots now
           el.children = [];
@@ -3428,10 +3461,7 @@
         // modifiers
         modifiers = parseModifiers(name.replace(dirRE, ''));
         // support .foo shorthand syntax for the .prop modifier
-        if (propBindRE.test(name)) {
-          (modifiers || (modifiers = {})).prop = true;
-          name = "." + name.slice(1).replace(modifierRE, '');
-        } else if (modifiers) {
+        if (modifiers) {
           name = name.replace(modifierRE, '');
         }
         if (bindRE.test(name)) { // v-bind
@@ -4524,7 +4554,7 @@
         { start: el.start }
       );
     }
-    if (ast.type === 1) {
+    if (ast && ast.type === 1) {
       var inlineRenderFns = generate(ast, state.options);
       return ("inlineTemplate:{render:function(){" + (inlineRenderFns.render) + "},staticRenderFns:[" + (inlineRenderFns.staticRenderFns.map(function (code) { return ("function(){" + code + "}"); }).join(',')) + "]}")
     }
@@ -4534,43 +4564,33 @@
     slots,
     state
   ) {
-    var hasDynamicKeys = Object.keys(slots).some(function (key) { return slots[key].slotTargetDynamic; });
+    var hasDynamicKeys = Object.keys(slots).some(function (key) {
+      var slot = slots[key];
+      return slot.slotTargetDynamic || slot.if || slot.for
+    });
     return ("scopedSlots:_u([" + (Object.keys(slots).map(function (key) {
-        return genScopedSlot(key, slots[key], state)
+        return genScopedSlot(slots[key], state)
       }).join(',')) + "]" + (hasDynamicKeys ? ",true" : "") + ")")
   }
 
   function genScopedSlot (
-    key,
     el,
     state
   ) {
+    var isLegacySyntax = el.attrsMap['slot-scope'];
+    if (el.if && !el.ifProcessed && !isLegacySyntax) {
+      return genIf(el, state, genScopedSlot, "null")
+    }
     if (el.for && !el.forProcessed) {
-      return genForScopedSlot(key, el, state)
+      return genFor(el, state, genScopedSlot)
     }
     var fn = "function(" + (String(el.slotScope)) + "){" +
       "return " + (el.tag === 'template'
-        ? el.if
+        ? el.if && isLegacySyntax
           ? ("(" + (el.if) + ")?" + (genChildren(el, state) || 'undefined') + ":undefined")
           : genChildren(el, state) || 'undefined'
         : genElement(el, state)) + "}";
-    return ("{key:" + key + ",fn:" + fn + "}")
-  }
-
-  function genForScopedSlot (
-    key,
-    el,
-    state
-  ) {
-    var exp = el.for;
-    var alias = el.alias;
-    var iterator1 = el.iterator1 ? ("," + (el.iterator1)) : '';
-    var iterator2 = el.iterator2 ? ("," + (el.iterator2)) : '';
-    el.forProcessed = true; // avoid recursion
-    return "_l((" + exp + ")," +
-      "function(" + alias + iterator1 + iterator2 + "){" +
-        "return " + (genScopedSlot(key, el, state)) +
-      '})'
+    return ("{key:" + (el.slotTarget || "\"default\"") + ",fn:" + fn + "}")
   }
 
   function genChildren (

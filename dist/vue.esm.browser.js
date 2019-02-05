@@ -1,5 +1,5 @@
 /*!
- * Vue.js v2.6.0-beta.3
+ * Vue.js v2.6.2
  * (c) 2014-2019 Evan You
  * Released under the MIT License.
  */
@@ -1880,7 +1880,7 @@ function invokeWithErrorHandling (
   let res;
   try {
     res = args ? handler.apply(context, args) : handler.call(context);
-    if (isPromise(res)) {
+    if (res && !res._isVue && isPromise(res)) {
       res.catch(e => handleError(e, vm, info + ` (Promise/async)`));
     }
   } catch (e) {
@@ -2780,7 +2780,7 @@ function resolveScopedSlots (
     const slot = fns[i];
     if (Array.isArray(slot)) {
       resolveScopedSlots(slot, hasDynamicKeys, res);
-    } else {
+    } else if (slot) {
       res[slot.key] = slot.fn;
     }
   }
@@ -3934,7 +3934,7 @@ function normalizeScopedSlots (
     res = {};
     for (const key in slots) {
       if (slots[key] && key[0] !== '$') {
-        res[key] = normalizeScopedSlot(slots[key]);
+        res[key] = normalizeScopedSlot(normalSlots, key, slots[key]);
       }
     }
   }
@@ -3945,17 +3945,24 @@ function normalizeScopedSlots (
     }
   }
   res._normalized = true;
-  res.$stable = slots && slots.$stable;
+  res.$stable = slots ? slots.$stable : true;
   return res
 }
 
-function normalizeScopedSlot(fn) {
-  return scope => {
+function normalizeScopedSlot(normalSlots, key, fn) {
+  const normalized = (scope = {}) => {
     const res = fn(scope);
     return res && typeof res === 'object' && !Array.isArray(res)
       ? [res] // single vnode
       : normalizeChildren(res)
+  };
+  // proxy scoped slots on normal $slots
+  if (!hasOwn(normalSlots, key)) {
+    Object.defineProperty(normalSlots, key, {
+      get: normalized
+    });
   }
+  return normalized
 }
 
 function proxyNormalSlot(slots, key) {
@@ -4616,7 +4623,7 @@ function mergeHook$1 (f1, f2) {
 function transformModel (options, data) {
   const prop = (options.model && options.model.prop) || 'value';
   const event = (options.model && options.model.event) || 'input'
-  ;(data.props || (data.props = {}))[prop] = data.model.value;
+  ;(data.attrs || (data.attrs = {}))[prop] = data.model.value;
   const on = data.on || (data.on = {});
   const existing = on[event];
   const callback = data.model.callback;
@@ -5352,7 +5359,7 @@ Object.defineProperty(Vue, 'FunctionalRenderContext', {
   value: FunctionalRenderContext
 });
 
-Vue.version = '2.6.0-beta.3';
+Vue.version = '2.6.2';
 
 /*  */
 
@@ -5372,6 +5379,17 @@ const mustUseProp = (tag, type, attr) => {
 };
 
 const isEnumeratedAttr = makeMap('contenteditable,draggable,spellcheck');
+
+const isValidContentEditableValue = makeMap('events,caret,typing,plaintext-only');
+
+const convertEnumeratedValue = (key, value) => {
+  return isFalsyAttrValue(value) || value === 'false'
+    ? 'false'
+    // allow arbitrary string value for contenteditable
+    : key === 'contenteditable' && isValidContentEditableValue(value)
+      ? value
+      : 'true'
+};
 
 const isBooleanAttr = makeMap(
   'allowfullscreen,async,autofocus,autoplay,checked,compact,controls,declare,' +
@@ -6637,7 +6655,7 @@ function setAttr (el, key, value) {
       el.setAttribute(key, value);
     }
   } else if (isEnumeratedAttr(key)) {
-    el.setAttribute(key, isFalsyAttrValue(value) || value === 'false' ? 'false' : 'true');
+    el.setAttribute(key, convertEnumeratedValue(key, value));
   } else if (isXlink(key)) {
     if (isFalsyAttrValue(value)) {
       el.removeAttributeNS(xlinkNS, getXlinkProp(key));
@@ -6659,8 +6677,8 @@ function baseSetAttr (el, key, value) {
     /* istanbul ignore if */
     if (
       isIE && !isIE9 &&
-      (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') &&
-      key === 'placeholder' && !el.__ieph
+      el.tagName === 'TEXTAREA' &&
+      key === 'placeholder' && value !== '' && !el.__ieph
     ) {
       const blocker = e => {
         e.stopImmediatePropagation();
@@ -7647,7 +7665,7 @@ const setProp = (el, name, val) => {
   if (cssVarRE.test(name)) {
     el.style.setProperty(name, val);
   } else if (importantRE.test(val)) {
-    el.style.setProperty(name, val.replace(importantRE, ''), 'important');
+    el.style.setProperty(hyphenate(name), val.replace(importantRE, ''), 'important');
   } else {
     const normalizedName = normalize(name);
     if (Array.isArray(val)) {
@@ -9129,10 +9147,11 @@ const decodingMap = {
   '&quot;': '"',
   '&amp;': '&',
   '&#10;': '\n',
-  '&#9;': '\t'
+  '&#9;': '\t',
+  '&#39;': "'"
 };
-const encodedAttr = /&(?:lt|gt|quot|amp);/g;
-const encodedAttrWithNewLines = /&(?:lt|gt|quot|amp|#10|#9);/g;
+const encodedAttr = /&(?:lt|gt|quot|amp|#39);/g;
+const encodedAttrWithNewLines = /&(?:lt|gt|quot|amp|#39|#10|#9);/g;
 
 // #5992
 const isIgnoreNewlineTag = makeMap('pre,textarea', true);
@@ -9399,7 +9418,7 @@ function parseHTML (html, options) {
 /*  */
 
 const onRE = /^@|^v-on:/;
-const dirRE = /^v-|^@|^:|^\./;
+const dirRE = /^v-|^@|^:/;
 const forAliasRE = /([\s\S]*?)\s+(?:in|of)\s+([\s\S]*)/;
 const forIteratorRE = /,([^,\}\]]*)(?:,([^,\}\]]*))?$/;
 const stripParensRE = /^\(|\)$/g;
@@ -9407,7 +9426,6 @@ const dynamicArgRE = /^\[.*\]$/;
 
 const argRE = /:(.*)$/;
 const bindRE = /^:|^\.|^v-bind:/;
-const propBindRE = /^\./;
 const modifierRE = /\.[^.]+/g;
 
 const slotRE = /^v-slot(:|$)|^#/;
@@ -9484,6 +9502,7 @@ function parse (
   }
 
   function closeElement (element) {
+    trimEndingWhitespace(element);
     if (!inVPre && !element.processed) {
       element = processElement(element, options);
     }
@@ -9510,14 +9529,25 @@ function parse (
     if (currentParent && !element.forbidden) {
       if (element.elseif || element.else) {
         processIfConditions(element, currentParent);
-      } else if (element.slotScope) { // scoped slot
-        const name = element.slotTarget || '"default"'
-        ;(currentParent.scopedSlots || (currentParent.scopedSlots = {}))[name] = element;
       } else {
+        if (element.slotScope) {
+          // scoped slot
+          // keep it in the children list so that v-else(-if) conditions can
+          // find it as the prev node.
+          const name = element.slotTarget || '"default"'
+          ;(currentParent.scopedSlots || (currentParent.scopedSlots = {}))[name] = element;
+        }
         currentParent.children.push(element);
         element.parent = currentParent;
       }
     }
+
+    // final children cleanup
+    // filter out scoped slots
+    element.children = element.children.filter(c => !(c).slotScope);
+    // remove trailing whitespace node again
+    trimEndingWhitespace(element);
+
     // check pre state
     if (element.pre) {
       inVPre = false;
@@ -9528,6 +9558,20 @@ function parse (
     // apply post-transforms
     for (let i = 0; i < postTransforms.length; i++) {
       postTransforms[i](element, options);
+    }
+  }
+
+  function trimEndingWhitespace (el) {
+    // remove trailing whitespace node
+    if (!inPre) {
+      let lastNode;
+      while (
+        (lastNode = el.children[el.children.length - 1]) &&
+        lastNode.type === 3 &&
+        lastNode.text === ' '
+      ) {
+        el.children.pop();
+      }
     }
   }
 
@@ -9645,13 +9689,6 @@ function parse (
 
     end (tag, start, end) {
       const element = stack[stack.length - 1];
-      if (!inPre) {
-        // remove trailing whitespace node
-        const lastNode = element.children[element.children.length - 1];
-        if (lastNode && lastNode.type === 3 && lastNode.text === ' ') {
-          element.children.pop();
-        }
-      }
       // pop stack
       stack.length -= 1;
       currentParent = stack[stack.length - 1];
@@ -9733,16 +9770,20 @@ function parse (
       }
     },
     comment (text, start, end) {
-      const child = {
-        type: 3,
-        text,
-        isComment: true
-      };
-      if (options.outputSourceRange) {
-        child.start = start;
-        child.end = end;
+      // adding anyting as a sibling to the root node is forbidden
+      // comments should still be allowed, but ignored
+      if (currentParent) {
+        const child = {
+          type: 3,
+          text,
+          isComment: true
+        };
+        if (options.outputSourceRange) {
+          child.start = start;
+          child.end = end;
+        }
+        currentParent.children.push(child);
       }
-      currentParent.children.push(child);
     }
   });
   return root
@@ -9995,6 +10036,13 @@ function processSlotContent (el) {
               el
             );
           }
+          if (el.parent && !maybeComponent(el.parent)) {
+            warn$2(
+              `<template v-slot> can only appear at the root level inside ` +
+              `the receiving the component`,
+              el
+            );
+          }
         }
         const { name, dynamic } = getSlotName(slotBinding);
         el.slotTarget = name;
@@ -10030,8 +10078,9 @@ function processSlotContent (el) {
         const slots = el.scopedSlots || (el.scopedSlots = {});
         const { name, dynamic } = getSlotName(slotBinding);
         const slotContainer = slots[name] = createASTElement('template', [], el);
+        slotContainer.slotTarget = name;
         slotContainer.slotTargetDynamic = dynamic;
-        slotContainer.children = el.children;
+        slotContainer.children = el.children.filter(c => !(c).slotScope);
         slotContainer.slotScope = slotBinding.value || `_`;
         // remove children as they are returned from scopedSlots now
         el.children = [];
@@ -10098,10 +10147,7 @@ function processAttrs (el) {
       // modifiers
       modifiers = parseModifiers(name.replace(dirRE, ''));
       // support .foo shorthand syntax for the .prop modifier
-      if (propBindRE.test(name)) {
-        (modifiers || (modifiers = {})).prop = true;
-        name = `.` + name.slice(1).replace(modifierRE, '');
-      } else if (modifiers) {
+      if (modifiers) {
         name = name.replace(modifierRE, '');
       }
       if (bindRE.test(name)) { // v-bind
@@ -11070,7 +11116,7 @@ function genInlineTemplate (el, state) {
       { start: el.start }
     );
   }
-  if (ast.type === 1) {
+  if (ast && ast.type === 1) {
     const inlineRenderFns = generate(ast, state.options);
     return `inlineTemplate:{render:function(){${
       inlineRenderFns.render
@@ -11084,46 +11130,36 @@ function genScopedSlots (
   slots,
   state
 ) {
-  const hasDynamicKeys = Object.keys(slots).some(key => slots[key].slotTargetDynamic);
+  const hasDynamicKeys = Object.keys(slots).some(key => {
+    const slot = slots[key];
+    return slot.slotTargetDynamic || slot.if || slot.for
+  });
   return `scopedSlots:_u([${
     Object.keys(slots).map(key => {
-      return genScopedSlot(key, slots[key], state)
+      return genScopedSlot(slots[key], state)
     }).join(',')
   }]${hasDynamicKeys ? `,true` : ``})`
 }
 
 function genScopedSlot (
-  key,
   el,
   state
 ) {
+  const isLegacySyntax = el.attrsMap['slot-scope'];
+  if (el.if && !el.ifProcessed && !isLegacySyntax) {
+    return genIf(el, state, genScopedSlot, `null`)
+  }
   if (el.for && !el.forProcessed) {
-    return genForScopedSlot(key, el, state)
+    return genFor(el, state, genScopedSlot)
   }
   const fn = `function(${String(el.slotScope)}){` +
     `return ${el.tag === 'template'
-      ? el.if
+      ? el.if && isLegacySyntax
         ? `(${el.if})?${genChildren(el, state) || 'undefined'}:undefined`
         : genChildren(el, state) || 'undefined'
       : genElement(el, state)
     }}`;
-  return `{key:${key},fn:${fn}}`
-}
-
-function genForScopedSlot (
-  key,
-  el,
-  state
-) {
-  const exp = el.for;
-  const alias = el.alias;
-  const iterator1 = el.iterator1 ? `,${el.iterator1}` : '';
-  const iterator2 = el.iterator2 ? `,${el.iterator2}` : '';
-  el.forProcessed = true; // avoid recursion
-  return `_l((${exp}),` +
-    `function(${alias}${iterator1}${iterator2}){` +
-      `return ${genScopedSlot(key, el, state)}` +
-    '})'
+  return `{key:${el.slotTarget || `"default"`},fn:${fn}}`
 }
 
 function genChildren (
