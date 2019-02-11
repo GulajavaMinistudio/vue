@@ -1103,4 +1103,72 @@ describe('Component scoped slot', () => {
     }).$mount()
     expect(vm.$el.textContent).toBe('hello')
   })
+
+  it('should not cache scoped slot normalization when there are a mix of normal and scoped slots', done => {
+    const foo = {
+      template: `<div><slot name="foo" /> <slot name="bar" /></div>`
+    }
+
+    const vm = new Vue({
+      data: {
+        msg: 'foo'
+      },
+      template: `
+        <foo>
+          <div slot="foo">{{ msg }}</div>
+          <template #bar><div>bar</div></template>
+        </foo>
+      `,
+      components: { foo }
+    }).$mount()
+
+    expect(vm.$el.textContent).toBe(`foo bar`)
+    vm.msg = 'baz'
+    waitForUpdate(() => {
+      expect(vm.$el.textContent).toBe(`baz bar`)
+    }).then(done)
+  })
+
+  // #9468
+  it('should support passing multiple args to scoped slot function', () => {
+    const foo = {
+      render() {
+        return this.$scopedSlots.default('foo', 'bar')
+      }
+    }
+
+    const vm = new Vue({
+      template: `<foo v-slot="foo, bar">{{ foo }} {{ bar }}</foo>`,
+      components: { foo }
+    }).$mount()
+
+    expect(vm.$el.textContent).toBe('foo bar')
+  })
+
+  it('should not skip updates when a scoped slot contains parent <slot/> content', done => {
+    const inner = {
+      template: `<div><slot/></div>`
+    }
+
+    const wrapper = {
+      template: `<inner v-slot><slot/></inner>`,
+      components: { inner }
+    }
+
+    const vm = new Vue({
+      data() {
+        return {
+          ok: true
+        }
+      },
+      components: { wrapper },
+      template: `<wrapper><div>{{ ok ? 'foo' : 'bar' }}</div></wrapper>`
+    }).$mount()
+
+    expect(vm.$el.textContent).toBe('foo')
+    vm.ok = false
+    waitForUpdate(() => {
+      expect(vm.$el.textContent).toBe('bar')
+    }).then(done)
+  })
 })
